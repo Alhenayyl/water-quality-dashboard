@@ -1,0 +1,389 @@
+<!-- Set up the HTML structure with external libraries -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!-- Specify character encoding for proper text display -->
+  <meta charset="UTF-8">
+  <!-- Make the dashboard responsive on all devices -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Set the page title shown in the browser tab -->
+  <title>Water Quality Dashboard</title>
+  <!-- Load Tailwind CSS for easy styling (colors, layout, etc.) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Load libraries: prop-types (for React), React (for UI), ReactDOM (to render), Babel (to process JSX), PapaParse (to read CSV), Chrono (to parse dates), Recharts (for charts) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script src="https://unpkg.com/papaparse@latest/papaparse.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chrono-node/1.3.11/chrono.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.15.0/Recharts.min.js"></script>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col">
+  <!-- Create a container div where the React app will be displayed -->
+  <div id="root" class="container mx-auto p-4 flex-grow"></div>
+
+  <!-- JavaScript code with React and JSX (processed by Babel) -->
+  <script type="text/babel">
+    // Define water quality limits based on SANS 241:2015 standards
+    const SANS_LIMITS = {
+      pH: { min: 5.0, max: 9.5, good: '5.0–9.5', warning: '<5.0 or >9.5' },
+      turbidity_NTU: { maxIdeal: 1, max: 5, good: '≤5', warning: '>5' },
+      free_chlorine_mg_L: { min: 0.2, max: 5.0, good: '0.2–5.0', warning: '<0.2 or >5.0' },
+      tds_mg_L: { max: 1200, good: '≤1200', warning: '>1200' },
+      nitrate_mg_L: { max: 11, good: '≤11', warning: '>11' }
+    };
+
+    // Sample CSV data for testing (shows 5 days of water quality data)
+    const sampleCsvData = `
+timestamp,pH,turbidity_NTU,free_chlorine_mg_L,tds_mg_L,nitrate_mg_L
+2023-01-01 00:00:00,7.2,0.5,0.3,300,5.0
+2023-01-02 00:00:00,7.4,0.8,0.4,320,5.2
+2023-01-03 00:00:00,7.1,1.2,0.25,310,5.5
+2023-01-04 00:00:00,7.3,0.7,0.35,305,5.1
+2023-01-05 00:00:00,7.5,0.9,0.5,315,5.3
+`.trim();
+
+    // Main React component for the dashboard
+    const App = () => {
+      // Store data, loading status, error messages, and selected parameters
+      const [data, setData] = React.useState([]); // Holds water quality data
+      const [loading, setLoading] = React.useState(true); // Tracks if data is loading
+      const [error, setError] = React.useState(null); // Stores error messages
+      const [visibleParams, setVisibleParams] = React.useState([
+        'pH', 'turbidity_NTU', 'free_chlorine_mg_L', 'tds_mg_L', 'nitrate_mg_L'
+      ]); // Tracks which parameters to show
+
+      // Clean and format CSV data for use
+      const processAndCleanData = (rawData) => {
+        return rawData
+          // Remove rows with missing values
+          .filter(row => 
+            row.timestamp && 
+            row.pH && 
+            row.turbidity_NTU && 
+            row.free_chlorine_mg_L && 
+            row.tds_mg_L && 
+            row.nitrate_mg_L
+          )
+          // Convert data to correct formats (e.g., numbers, dates)
+          .map(row => ({
+            timestamp: chrono.parseDate(row.timestamp), // Convert string to Date object
+            pH: parseFloat(row.pH) || 0, // Convert to number or use 0 if invalid
+            turbidity_NTU: parseFloat(row.turbidity_NTU) || 0,
+            free_chlorine_mg_L: parseFloat(row.free_chlorine_mg_L) || 0,
+            tds_mg_L: parseFloat(row.tds_mg_L) || 0,
+            nitrate_mg_L: parseFloat(row.nitrate_mg_L) || 0
+          }))
+          // Keep only rows with valid dates and numbers
+          .filter(row => 
+            row.timestamp instanceof Date && 
+            !isNaN(row.pH) && 
+            !isNaN(row.turbidity_NTU) && 
+            !isNaN(row.free_chlorine_mg_L) && 
+            !isNaN(row.tds_mg_L) && 
+            !isNaN(row.nitrate_mg_L)
+          );
+      };
+
+      // Calculate Min, Max, and Average for a parameter
+      const calculateInsights = (data, param) => {
+        // Return zeros if no data to avoid errors
+        if (!data || data.length === 0) return { min: 0, max: 0, avg: 0 };
+        const values = data.map(row => row[param]); // Get all values for the parameter
+        const min = Math.min(...values); // Find smallest value
+        const max = Math.max(...values); // Find largest value
+        const avg = values.reduce((sum, val) => sum + val, 0) / values.length; // Calculate average
+        return { min, max, avg };
+      };
+
+      // Check if a parameter's average meets SANS 241:2015 standards
+      const getStatus = (param, value) => {
+        const limits = SANS_LIMITS[param];
+        if (param === 'pH') {
+          return value >= limits.min && value <= limits.max ? 'Good' : 'Warning';
+        } else if (param === 'turbidity_NTU') {
+          return value <= limits.max ? 'Good' : 'Warning';
+        } else if (param === 'free_chlorine_mg_L') {
+          return value >= limits.min && value <= limits.max ? 'Good' : 'Warning';
+        } else if (param === 'tds_mg_L' || param === 'nitrate_mg_L') {
+          return value <= limits.max ? 'Good' : 'Warning';
+        }
+        return 'Unknown';
+      };
+
+      // Load data when the component starts
+      React.useEffect(() => {
+        // Parse sample CSV data (runs without needing an external file)
+        Papa.parse(sampleCsvData, {
+          header: true, // Use first CSV row as column names
+          skipEmptyLines: true, // Ignore empty rows
+          dynamicTyping: false, // Keep values as strings for cleaning
+          transformHeader: header => header.trim().replace(/^"|"$/g, ''), // Clean header names
+          transform: (value, header) => value.trim().replace(/^"|"$/g, ''), // Clean cell values
+          complete: (results) => {
+            const cleanedData = processAndCleanData(results.data); // Process the data
+            if (cleanedData.length === 0) {
+              setError('No valid data found in CSV'); // Show error if no valid data
+            } else {
+              setData(cleanedData); // Store cleaned data
+            }
+            setLoading(false); // Stop loading
+          },
+          error: (err) => {
+            console.error('Error parsing CSV:', err); // Log error to console
+            setError('Failed to parse CSV data'); // Show error in UI
+            setLoading(false); // Stop loading
+          }
+        });
+
+        // To use the actual CSV file, place it in the same folder and uncomment this:
+        
+        fetch('real_time_simulated_sensor_data_SANS_adapted_v3.csv')
+          .then(response => {
+            if (!response.ok) throw new Error('Failed to fetch CSV'); // Check if file loads
+            return response.text(); // Get CSV text
+          })
+          .then(csvText => {
+            Papa.parse(csvText, {
+              header: true,
+              skipEmptyLines: true,
+              dynamicTyping: false,
+              transformHeader: header => header.trim().replace(/^"|"$/g, ''),
+              transform: (value, header) => value.trim().replace(/^"|"$/g, ''),
+              complete: (results) => {
+                const cleanedData = processAndCleanData(results.data);
+                if (cleanedData.length === 0) {
+                  setError('No valid data found in CSV');
+                } else {
+                  setData(cleanedData);
+                }
+                setLoading(false);
+              },
+              error: (err) => {
+                console.error('Error parsing CSV:', err);
+                setError('Failed to parse CSV data');
+                setLoading(false);
+              }
+            });
+          })
+          .catch(err => {
+            console.error('Error fetching CSV:', err);
+            setError('Failed to load CSV file');
+            setLoading(false);
+          });
+        
+      }, []); // Empty array means this runs once on component load
+
+      // Update which parameters to show when dropdown changes
+      const handleParamChange = (e) => {
+        const selected = Array.from(e.target.selectedOptions).map(option => option.value);
+        setVisibleParams(selected.length > 0 ? selected : ['pH']); // Default to pH if none selected
+      };
+
+      // Show "Loading" message while data is loading
+      if (loading) {
+        return (
+          <div class="flex justify-center items-center h-screen">
+            <p class="text-xl text-gray-600">Loading water quality data...</p>
+          </div>
+        );
+      }
+
+      // Show error message if data fails to load
+      if (error) {
+        return (
+          <div class="flex justify-center items-center h-screen">
+            <p class="text-xl text-red-600">{error}</p>
+          </div>
+        );
+      }
+
+      // Render the dashboard with dropdown, insights, and charts
+      return (
+        <div class="space-y-6">
+          {/* Dashboard title */}
+          <h1 class="text-3xl font-bold text-center text-blue-800">Water Quality Monitoring Dashboard</h1>
+          
+          {/* Dropdown to choose which parameters to display */}
+          <div class="mb-6">
+            <label for="parameter-select" class="block text-lg font-semibold text-gray-800 mb-2">
+              Select Parameters to Display:
+            </label>
+            <select id="parameter-select" multiple class="w-full p-2 border rounded-md bg-white text-gray-700" onChange={handleParamChange}>
+              <option value="pH" selected>pH</option>
+              <option value="turbidity_NTU" selected>Turbidity (NTU)</option>
+              <option value="free_chlorine_mg_L" selected>Free Chlorine (mg/L)</option>
+              <option value="tds_mg_L" selected>TDS (mg/L)</option>
+              <option value="nitrate_mg_L" selected>Nitrate (mg/L)</option>
+            </select>
+          </div>
+
+          {/* Insights section showing Min, Max, Average, and Status */}
+          <div class="bg-white p-4 rounded-lg shadow">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">Data Insights</h2>
+            {data.length === 0 ? (
+              <p class="text-gray-600">No data available to display insights.</p>
+            ) : (
+              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {visibleParams.map(param => {
+                  const insights = calculateInsights(data, param); // Get Min, Max, Avg
+                  const status = getStatus(param, insights.avg); // Check if within SANS limits
+                  const paramName = {
+                    pH: 'pH',
+                    turbidity_NTU: 'Turbidity (NTU)',
+                    free_chlorine_mg_L: 'Free Chlorine (mg/L)',
+                    tds_mg_L: 'TDS (mg/L)',
+                    nitrate_mg_L: 'Nitrate (mg/L)'
+                  }[param]; // Friendly parameter name
+                  return (
+                    <div key={param} class="p-4 bg-gray-50 rounded-md border">
+                      <h3 class="text-md font-semibold text-gray-700">{paramName}</h3>
+                      <p>Min: {insights.min.toFixed(param === 'nitrate_mg_L' ? 3 : 2)}</p>
+                      <p>Max: {insights.max.toFixed(param === 'nitrate_mg_L' ? 3 : 2)}</p>
+                      <p>Avg: {insights.avg.toFixed(param === 'nitrate_mg_L' ? 3 : 2)}</p>
+                      <p class="mt-2">
+                        Status: <span class={status === 'Good' ? 'text-green-600' : 'text-red-600'}>{status}</span>
+                        (SANS 241: {SANS_LIMITS[param].good})
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Charts section showing line graphs for each parameter */}
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {visibleParams.includes('pH') && (
+              <div class="bg-white p-4 rounded-lg shadow">
+                <h2 class="text-lg font-semibold text-gray-800 mb-2">pH Over Time</h2>
+                <div style={{ width: '100%', height: '300px' }}>
+                  <Recharts.ResponsiveContainer>
+                    <Recharts.LineChart data={data}>
+                      <Recharts.CartesianGrid strokeDasharray="3 3" /> {/* Add grid lines */}
+                      <Recharts.XAxis 
+                        dataKey="timestamp" 
+                        tickFormatter={(date) => date.toLocaleDateString()} // Show dates on x-axis
+                        style={{ fontSize: 12 }}
+                      />
+                      <Recharts.YAxis 
+                        label={{ value: 'pH', angle: -90, position: 'insideLeft', style: { fontSize: 12 } }} 
+                        style={{ fontSize: 12 }}
+                      />
+                      <Recharts.Tooltip formatter={(value) => value.toFixed(2)} /> {/* Show values on hover */}
+                      <Recharts.Legend /> {/* Show chart legend */}
+                      <Recharts.Line type="monotone" dataKey="pH" stroke="#3B82F6" /> {/* Blue line for pH */}
+                    </Recharts.LineChart>
+                  </Recharts.ResponsiveContainer>
+                </div>
+              </div>
+            )}
+            {visibleParams.includes('turbidity_NTU') && (
+              <div class="bg-white p-4 rounded-lg shadow">
+                <h2 class="text-lg font-semibold text-gray-800 mb-2">Turbidity (NTU) Over Time</h2>
+                <div style={{ width: '100%', height: '300px' }}>
+                  <Recharts.ResponsiveContainer>
+                    <Recharts.LineChart data={data}>
+                      <Recharts.CartesianGrid strokeDasharray="3 3" />
+                      <Recharts.XAxis 
+                        dataKey="timestamp" 
+                        tickFormatter={(date) => date.toLocaleDateString()}
+                        style={{ fontSize: 12 }}
+                      />
+                      <Recharts.YAxis 
+                        label={{ value: 'Turbidity (NTU)', angle: -90, position: 'insideLeft', style: { fontSize: 12 } }} 
+                        style={{ fontSize: 12 }}
+                      />
+                      <Recharts.Tooltip formatter={(value) => value.toFixed(2)} />
+                      <Recharts.Legend />
+                      <Recharts.Line type="monotone" dataKey="turbidity_NTU" stroke="#10B981" /> {/* Green line */}
+                    </Recharts.LineChart>
+                  </Recharts.ResponsiveContainer>
+                </div>
+              </div>
+            )}
+            {visibleParams.includes('free_chlorine_mg_L') && (
+              <div class="bg-white p-4 rounded-lg shadow">
+                <h2 class="text-lg font-semibold text-gray-800 mb-2">Free Chlorine (mg/L) Over Time</h2>
+                <div style={{ width: '100%', height: '300px' }}>
+                  <Recharts.ResponsiveContainer>
+                    <Recharts.LineChart data={data}>
+                      <Recharts.CartesianGrid strokeDasharray="3 3" />
+                      <Recharts.XAxis 
+                        dataKey="timestamp" 
+                        tickFormatter={(date) => date.toLocaleDateString()}
+                        style={{ fontSize: 12 }}
+                      />
+                      <Recharts.YAxis 
+                        label={{ value: 'Free Chlorine (mg/L)', angle: -90, position: 'insideLeft', style: { fontSize: 12 } }} 
+                        style={{ fontSize: 12 }}
+                      />
+                      <Recharts.Tooltip formatter={(value) => value.toFixed(2)} />
+                      <Recharts.Legend />
+                      <Recharts.Line type="monotone" dataKey="free_chlorine_mg_L" stroke="#8B5CF6" /> {/* Purple line */}
+                    </Recharts.LineChart>
+                  </Recharts.ResponsiveContainer>
+                </div>
+              </div>
+            )}
+            {visibleParams.includes('tds_mg_L') && (
+              <div class="bg-white p-4 rounded-lg shadow">
+                <h2 class="text-lg font-semibold text-gray-800 mb-2">TDS (mg/L) Over Time</h2>
+                <div style={{ width: '100%', height: '300px' }}>
+                  <Recharts.ResponsiveContainer>
+                    <Recharts.LineChart data={data}>
+                      <Recharts.CartesianGrid strokeDasharray="3 3" />
+                      <Recharts.XAxis 
+                        dataKey="timestamp" 
+                        tickFormatter={(date) => date.toLocaleDateString()}
+                        style={{ fontSize: 12 }}
+                      />
+                      <Recharts.YAxis 
+                        label={{ value: 'TDS (mg/L)', angle: -90, position: 'insideLeft', style: { fontSize: 12 } }} 
+                        style={{ fontSize: 12 }}
+                        tickFormatter={(value) => value >= 1000 ? `${(value / 1000).toFixed(1)}k` : value} // Show 'k' for large values
+                      />
+                      <Recharts.Tooltip formatter={(value) => value.toFixed(2)} />
+                      <Recharts.Legend />
+                      <Recharts.Line type="monotone" dataKey="tds_mg_L" stroke="#F59E0B" /> {/* Orange line */}
+                    </Recharts.LineChart>
+                  </Recharts.ResponsiveContainer>
+                </div>
+              </div>
+            )}
+            {visibleParams.includes('nitrate_mg_L') && (
+              <div class="bg-white p-4 rounded-lg shadow">
+                <h2 class="text-lg font-semibold text-gray-800 mb-2">Nitrate (mg/L) Over Time</h2>
+                <div style={{ width: '100%', height: '300px' }}>
+                  <Recharts.ResponsiveContainer>
+                    <Recharts.LineChart data={data}>
+                      <Recharts.CartesianGrid strokeDasharray="3 3" />
+                      <Recharts.XAxis 
+                        dataKey="timestamp" 
+                        tickFormatter={(date) => date.toLocaleDateString()}
+                        style={{ fontSize: 12 }}
+                      />
+                      <Recharts.YAxis 
+                        label={{ value: 'Nitrate (mg/L)', angle: -90, position: 'insideLeft', style: { fontSize: 12 } }} 
+                        style={{ fontSize: 12 }}
+                      />
+                      <Recharts.Tooltip formatter={(value) => value.toFixed(3)} /> {/* 3 decimals for nitrate */}
+                      <Recharts.Legend />
+                      <Recharts.Line type="monotone" dataKey="nitrate_mg_L" stroke="#EC4899" /> {/* Pink line */}
+                    </Recharts.LineChart>
+                  </Recharts.ResponsiveContainer>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    // Display the dashboard in the root div
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
